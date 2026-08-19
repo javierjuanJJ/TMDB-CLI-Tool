@@ -10,6 +10,7 @@ const ENDPOINT_BY_TYPE = {
   playing: '/movie/now_playing',
   popular: '/movie/popular',
   top: '/movie/top_rated',
+  upcoming: '/movie/upcoming',
 };
 
 module.exports = {

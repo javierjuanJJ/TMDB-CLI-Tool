@@ -15,6 +15,7 @@ const TYPE_TITLES = {
   playing: 'NOW PLAYING MOVIES',
   popular: 'POPULAR MOVIES',
   top: 'TOP RATED MOVIES',
+  upcoming: 'UPCOMING MOVIES',
 };
 
 module.exports = {
