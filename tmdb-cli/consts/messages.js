@@ -13,6 +13,7 @@ const MESSAGES = {
 
 const TYPE_TITLES = {
   playing: 'NOW PLAYING MOVIES',
+  popular: 'POPULAR MOVIES',
 };
 
 module.exports = {

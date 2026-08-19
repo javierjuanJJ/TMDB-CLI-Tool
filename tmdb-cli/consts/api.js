@@ -8,6 +8,7 @@ const DEFAULT_PAGE = 1;
 
 const ENDPOINT_BY_TYPE = {
   playing: '/movie/now_playing',
+  popular: '/movie/popular',
 };
 
 module.exports = {
