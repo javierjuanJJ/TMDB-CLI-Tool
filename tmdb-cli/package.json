@@ -1,0 +1,28 @@
+{
+  "name": "tmdb-cli",
+  "version": "1.0.0",
+  "description": "CLI para consultar información de películas desde la TMDB API y mostrarla formateada en la terminal.",
+  "main": "app.js",
+  "bin": {
+    "tmdb-app": "./app.js"
+  },
+  "scripts": {
+    "start": "node app.js --type popular",
+    "now-playing": "node app.js --type playing",
+    "popular": "node app.js --type popular",
+    "top-rated": "node app.js --type top",
+    "upcoming": "node app.js --type upcoming"
+  },
+  "keywords": [
+    "tmdb",
+    "cli",
+    "movies",
+    "terminal",
+    "api"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
