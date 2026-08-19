@@ -13,9 +13,9 @@ function resolveEndpoint(type) {
   return endpoint;
 }
 
-function detectStatusCode(context) {
+function detectStatusCode(rawBody) {
   try {
-    return JSON.parse(context.body).status_message;
+    return JSON.parse(rawBody).status_message;
   } catch (err) {
     return undefined;
   }
