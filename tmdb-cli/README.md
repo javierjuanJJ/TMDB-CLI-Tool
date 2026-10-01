@@ -47,7 +47,7 @@ POPULAR MOVIES
 8. [Manejo de errores](#manejo-de-errores)
 9. [Ejemplos de uso](#ejemplos-de-uso)
 10. [Tests](#tests)
-11. [Limitaciones conocidas](#limitaciones-conocidas)
+11. [Limitaciones y pendientes](#limitaciones-y-pendientes)
 12. [Documentación técnica](#documentación-técnica)
 13. [Licencia](#licencia)
 
@@ -70,16 +70,19 @@ El proyecto aplica una constitución técnica estricta definida en `spec/constit
 
 ## Cómo funciona
 
-El flujo es lineal: variable de entorno → argumentos → petición HTTP → formateo en terminal.
+El flujo es lineal: argumentos → variable de entorno → petición HTTP → formateo en terminal. Los argumentos se validan primero, de modo que `--help` y `--version` funcionan sin configurar `TMDB_API_KEY`.
 
 ```mermaid
 flowchart TD
-    A["node app.js --type popular"] --> B{"TMDB_API_KEY<br/>definida?"}
+    A["node app.js --type popular"] --> C["lib/args.js<br/>parseArguments"]
+    C --> K{"¿--help / -h?"}
+    K -- "sí" --> OK1["stdout: usage<br/>exit 0"]
+    K -- "--version / -v" --> OK2["stdout: tmdb-cli v1.0.0<br/>exit 0"]
+    K -- "no" --> D{"--type presente,<br/>sin flags ni posicionales<br/>y valor válido?"}
+    D -- "no" --> E2["stderr: [ERROR] missingType /<br/>invalidType / unknownFlag /<br/>unexpectedArgument · exit 1"]
+    D -- "sí" --> B{"TMDB_API_KEY<br/>definida?"}
     B -- "no" --> E1["stderr: [ERROR] missingApiKey<br/>exit 1"]
-    B -- "sí" --> C["lib/args.js<br/>parseArguments"]
-    C --> D{"--type presente<br/>y válido?"}
-    D -- "no" --> E2["stderr: [ERROR] missingType<br/>o invalidType<br/>exit 1"]
-    D -- "sí" --> F["lib/api.js<br/>fetchMovies"]
+    B -- "sí" --> F["lib/api.js<br/>fetchMovies"]
     F --> G{"GET api.themoviedb.org/3<br/>/movie/&#123;endpoint&#125;"}
     G -- "fallo de red" --> E3["stderr: [ERROR] networkError<br/>exit 1"]
     G -- "HTTP !ok" --> E4["stderr: [ERROR] httpError<br/>+ status_message<br/>exit 1"]
@@ -94,6 +97,8 @@ flowchart TD
     style E4 fill:#ffdddd,stroke:#c00
     style E5 fill:#ffdddd,stroke:#c00
     style J fill:#ddffdd,stroke:#0a0
+    style OK1 fill:#ddffdd,stroke:#0a0
+    style OK2 fill:#ddffdd,stroke:#0a0
 ```
 
 ### Secuencia de una ejecución correcta
@@ -108,9 +113,9 @@ sequenceDiagram
     participant FMT as lib/formatter.js
 
     U->>CLI: node app.js --type popular
-    CLI->>CLI: lee process.env.TMDB_API_KEY
     CLI->>ARGS: parseArguments(argv)
-    ARGS-->>CLI: { type: "popular", typeTitle: "POPULAR MOVIES" }
+    ARGS-->>CLI: { action: "list", type: "popular", typeTitle: "POPULAR MOVIES" }
+    CLI->>CLI: comprueba process.env.TMDB_API_KEY
     CLI->>API: fetchMovies("popular")
     API->>API: resolveEndpoint → /movie/popular
     API->>TMDB: GET /movie/popular?language=en-US&page=1<br/>Authorization: Bearer $TMDB_API_KEY
@@ -136,7 +141,7 @@ Campos con valores ausentes o de tipo inesperado se sustituyen por textos litera
 | Campo | Valor de TMDB | Si falta o no es válido |
 |---|---|---|
 | Título | `title` | `Untitled` |
-| Puntuación | `vote_average` (número) | `N/A` (formateado a 1 decimal: `8.2/10`) |
+| Puntuación | `vote_average` (número) | `N/A` — sin el sufijo `/10`. Si es numérico se formatea a 1 decimal: `8.2/10` |
 | Fecha | `release_date` (string `YYYY-MM-DD`) | `Unknown date` |
 
 Si `results` llega vacío, se imprime `No movies found.` en atenuado (`\x1b[2m`) y se sale con código `0`.
@@ -203,12 +208,12 @@ graph TD
 
 | Archivo | Exporta | Responsabilidad |
 |---|---|---|
-| `app.js` | — | Guards de API key, try/catch de argumentos, orquesta `fetchMovies().then(displayMovies).catch(exit 1)` |
+| `app.js` | — | Shebang, try/catch de argumentos, salida de `--help`/`--version`, guard de API key y orquestación `fetchMovies().then(displayMovies).catch(exit 1)` |
 | `consts/api.js` | `BASE_URL`, `API_KEY_ENV_VAR`, `DEFAULT_LANGUAGE`, `DEFAULT_PAGE`, `ENDPOINT_BY_TYPE` | Constantes de dominio TMDB en `UPPER_SNAKE_CASE` |
-| `consts/messages.js` | `ERROR_PREFIX`, `MESSAGES`, `TYPE_TITLES` | Todos los textos visibles y plantillas de error |
-| `lib/args.js` | `parseArguments(argv)` | Valida presencia y valor de `--type`; **lanza** en error |
+| `consts/messages.js` | `ERROR_PREFIX`, `CLI_NAME`, `MESSAGES`, `TYPE_TITLES`, `versionLine()`, `helpText()` | Todos los textos visibles: errores, plantillas, títulos por tipo y el usage |
+| `lib/args.js` | `parseArguments(argv)` | Tokeniza y valida `--type` (`--type x` y `--type=x`), detecta `--help`/`--version` y rechaza flags desconocidos y posicionales; devuelve `{ action, type, typeTitle }` o `{ action }`; **lanza** en error |
 | `lib/api.js` | `fetchMovies(type)` | Resuelve endpoint, autentica, valida `response.ok` y `results[]`; **re-lanza** con contexto |
-| `lib/formatter.js` | `displayMovies(movies, typeTitle)` | Imprime el bloque con códigos ANSI |
+| `lib/formatter.js` | `displayMovies(movies, typeTitle)` | Imprime el bloque con códigos ANSI y aplica los fallbacks `Untitled` / `N/A` / `Unknown date` |
 
 ## Requisitos de instalación
 
@@ -266,6 +271,13 @@ node app.js --type "playing"
 node app.js --type "popular"
 node app.js --type "top"
 node app.js --type "upcoming"
+
+# Sintaxis con igual, equivalente a --type popular
+node app.js --type=popular
+
+# Ayuda y versión (no requieren TMDB_API_KEY)
+node app.js --help
+node app.js --version
 ```
 
 Alternativamente, mediante los scripts de `package.json`:
@@ -278,14 +290,18 @@ npm run top-rated
 npm run upcoming
 ```
 
-### Instalación global (binario `tmdb-app`) — actualmente no funcional
+### Instalación global (binario `tmdb-app`)
 
-`package.json` declara el binario `tmdb-app`, y `npm link` lo registra correctamente en el `PATH`, **pero el comando falla** porque `app.js` no tiene el shebang `#!/usr/bin/env node`. Ver [Limitaciones conocidas](#limitaciones-conocidas). Mientras no se corrija, usa `node app.js`.
+`package.json` declara el binario `tmdb-app`, y `app.js` incluye el shebang `#!/usr/bin/env node`, por lo que `npm link` lo deja ejecutable en el `PATH`:
 
 ```bash
-# Registra el enlace, pero tmdb-app --type popular aborta con error de sintaxis de bash
-npm link
+npm link                    # enlaza el binario en el PATH
+tmdb-app --type popular     # listado de populares
+tmdb-app --help             # ayuda
+tmdb-app --version          # versión
 ```
+
+Para desinstalarlo: `npm unlink -g tmdb-cli`.
 
 ## Dominio de datos
 
@@ -293,18 +309,19 @@ npm link
 
 | Entrada | Tipo | Formato | Obligatoria | Validación |
 |---|---|---|---|---|
-| `TMDB_API_KEY` | Variable de entorno | Token alfanumérico de TMDB | **Sí** | Se comprueba por truthiness: ausente **o string vacío** ⇒ error `missingApiKey` (`app.js:8`, `lib/api.js:26`) |
-| `argv[2..]` | Array de strings | `--type <valor>` | **Sí** | `lib/args.js:6` busca el flag con `indexOf`, toma el elemento siguiente |
-| `--type <valor>` | String enumerado | `playing` \| `popular` \| `top` \| `upcoming` | **Sí** | Se normaliza con `toLowerCase()` (acepta `POPULAR`) y se contrasta contra las claves de `ENDPOINT_BY_TYPE` |
+| `argv[2..]` | Array de strings | `--type <valor>`, `--help`, `--version` | **Sí** (salvo `--help`/`--version`) | `lib/args.js` tokeniza el array: `--type x` y `--type=x`; cualquier otro flag lanza `unknownFlag` y cualquier posicional lanza `unexpectedArgument` |
+| `--type <valor>` | String enumerado | `playing` \| `popular` \| `top` \| `upcoming` | **Sí** | Se normaliza con `toLowerCase()` (acepta `POPULAR`, `TOP`) y se contrasta contra las claves de `ENDPOINT_BY_TYPE` |
+| `TMDB_API_KEY` | Variable de entorno | Token alfanumérico de TMDB | **Sí** | Se comprueba por truthiness: ausente **o string vacío** ⇒ error `missingApiKey` (`app.js`, `lib/api.js:26`). Se valida **después** de los argumentos, así que `--help` y `--version` funcionan sin key |
 
 ### Salidas
 
 | Flujo | Formato | Contenido |
 |---|---|---|
 | `stdout` | Texto con ANSI | Encabezado + separadores de 60 chars + una línea por película + separador. Termina siempre en `0x0a` |
+| `stdout` | Texto plano | Salida de `--help` (usage) y `--version` (`tmdb-cli v1.0.0`) |
 | `stderr` | Texto plano | Mensajes `[ERROR] ...` (sin colores) |
-| Código de salida | `0` | Ejecución correcta, **incluido** el caso "no hay películas" |
-| Código de salida | `1` | Cualquier error: falta de key, argumentos inválidos, fallo de red, error HTTP, respuesta inesperada |
+| Código de salida | `0` | Ejecución correcta (**incluido** "no hay películas"), `--help` y `--version` |
+| Código de salida | `1` | Cualquier error: argumentos inválidos, falta de key, fallo de red, error HTTP, respuesta inesperada |
 
 ### Petición HTTP emitida
 
@@ -315,7 +332,7 @@ accept: application/json
 Authorization: Bearer <TMDB_API_KEY>
 ```
 
-`language` y `page` se rellenan desde `DEFAULT_LANGUAGE` y `DEFAULT_PAGE` y **no son configurables** por flags (ver [Limitaciones conocidas](#limitaciones-conocidas)).
+`language` y `page` se rellenan desde `DEFAULT_LANGUAGE` y `DEFAULT_PAGE` y **no son configurables** por flags (ver [Limitaciones y pendientes](#limitaciones-y-pendientes)).
 
 ### Datos devueltos por TMDB y usados
 
@@ -346,10 +363,11 @@ Solo se consumen `results[].title`, `results[].vote_average` y `results[].releas
 
 | Parámetro | Tipo | Obligatorio | Default | Valores válidos | Notas |
 |---|---|---|---|---|---|
-| `--type <valor>` | String enumerado | **Sí** | — | `playing`, `popular`, `top`, `upcoming` | Case-insensitive. Separador de espacio obligatorio |
-| `TMDB_API_KEY` | Variable de entorno | **Sí** | — | Cualquier token válido de TMDB | Se valida antes de parsear argumentos |
-| `--help`, `-h` | — | No | — | — | **No implementado**: cae en el error de `--type` |
-| `--version`, `-v` | — | No | — | — | **No implementado**: cae en el error de `--type` |
+| `--type <valor>` | String enumerado | **Sí** | — | `playing`, `popular`, `top`, `upcoming` | Case-insensitive en el valor. Acepta `--type popular` y `--type=popular` |
+| `--help`, `-h` | Boolean | No | — | — | Imprime el usage en `stdout` y sale con `0`. No requiere `TMDB_API_KEY` |
+| `--version`, `-v` | Boolean | No | — | — | Imprime `tmdb-cli v1.0.0` en `stdout` y sale con `0`. No requiere `TMDB_API_KEY` |
+| `TMDB_API_KEY` | Variable de entorno | **Sí** | — | Cualquier token válido de TMDB | Se valida **después** de los argumentos |
+| — | — | — | — | — | Los posicionales y los flags desconocidos se **rechazan** (exit `1`) |
 
 ### Tipos de consulta disponibles
 
@@ -364,12 +382,26 @@ Solo se consumen `results[].title`, `results[].vote_average` y `results[].releas
 
 Todas las filas se ejecutaron realmente. `✔` = comportamiento correcto; `✘` = discrepancia detectada. La columna "Real" recoge la salida observada.
 
+#### Ayuda y versión
+
+| Comando | Parámetros | Resultado esperado | Resultado real | Estado |
+|---|---|---|---|---|
+| `app.js --help` | `--help`, sin `TMDB_API_KEY` | usage en `stdout`, exit 0 | `tmdb-cli v1.0.0 — List movies...` + secciones USAGE/OPTIONS/ENVIRONMENT/LISTINGS/EXAMPLES · exit 0 | ✔ |
+| `app.js -h` | alias corto | igual que `--help` | mismo usage · exit 0 | ✔ |
+| `app.js --version` | `--version`, sin `TMDB_API_KEY` | `tmdb-cli v1.0.0` | `tmdb-cli v1.0.0` · exit 0 | ✔ |
+| `app.js -v` | alias corto | igual que `--version` | `tmdb-cli v1.0.0` · exit 0 | ✔ |
+| `app.js --type foo --help` | ayuda + valor inválido | la ayuda tiene prioridad | usage · exit 0 | ✔ |
+| `app.js --language es --help` | ayuda + flag desconocido | la ayuda tiene prioridad | usage · exit 0 | ✔ |
+| `tmdb-app --help` | binario global | usage | usage · exit 0 | ✔ |
+| `tmdb-app --version` | binario global | versión | `tmdb-cli v1.0.0` · exit 0 | ✔ |
+
 #### Argumentos y validación
 
 | Comando | Parámetros | Resultado esperado | Resultado real | Estado |
 |---|---|---|---|---|
-| `node app.js` | — | error: falta `TMDB_API_KEY` | `[ERROR] TMDB_API_KEY environment variable is not set...` · exit 1 | ✔ |
+| `node app.js` | — | error: falta `--type` | `[ERROR] Missing required flag: --type <value>. Run with --help to see the usage.` · exit 1 | ✔ |
 | `node app.js` | `TMDB_API_KEY=x` | error: falta `--type` | `[ERROR] Missing required flag: --type <value>...` · exit 1 | ✔ |
+| `node app.js --type popular` | sin `TMDB_API_KEY` | error: falta la key | `[ERROR] TMDB_API_KEY environment variable is not set...` · exit 1 | ✔ |
 | `app.js --type popular` | `--type popular` | listado de populares | `POPULAR MOVIES` + 3 películas · exit 0 | ✔ |
 | `app.js --type playing` | `--type playing` | cartelera | `NOW PLAYING MOVIES` · exit 0 | ✔ |
 | `app.js --type top` | `--type top` | mejor valoradas | `TOP RATED MOVIES` · exit 0 | ✔ |
@@ -382,15 +414,19 @@ Todas las filas se ejecutaron realmente. `✔` = comportamiento correcto; `✘` 
 | `app.js --type " pop ular"` | espacios | error: inválido | `Invalid --type value...` · exit 1 | ✔ |
 | `app.js --type "popular; rm -rf /"` | inyección shell | error: inválido, sin ejecución | `Invalid --type value...` · exit 1 | ✔ |
 | `app.js --type '$(whoami)'` | subshell | error: inválido, sin ejecución | `Invalid --type value...` · exit 1 | ✔ |
-| `app.js --help` | ayuda | mostrar usage | `Missing required flag: --type <value>` · exit 1 | ✘ |
-| `app.js -h` | ayuda corta | mostrar usage | `Missing required flag: --type <value>` · exit 1 | ✘ |
-| `app.js --version` | versión | mostrar `1.0.0` | `Missing required flag: --type <value>` · exit 1 | ✘ |
-| `app.js --type=popular` | sintaxis `=` | equivalente a `--type popular` | `Missing required flag: --type <value>` · exit 1 | ✘ |
-| `app.js --Type popular` | flag con otra caja | equivalente a `--type popular` | `Missing required flag: --type <value>` · exit 1 | ✘ |
-| `app.js movies --type popular` | posicional extra | ignorado | lista populares · exit 0 | ✔ |
+| `app.js --type=popular` | sintaxis `=` | equivalente a `--type popular` | `POPULAR MOVIES` · exit 0 | ✔ |
+| `app.js --type=TOP` | `=` + mayúsculas | case-insensitive | `TOP RATED MOVIES` · exit 0 | ✔ |
+| `app.js --type=` | `=` sin valor | error: falta valor | `Missing required flag: --type <value>` · exit 1 | ✔ |
+| `app.js --type=foo` | `=` con valor inválido | error: inválido | `Invalid --type value...` · exit 1 | ✔ |
+| `app.js --Type popular` | flag con otra caja | error explícito de opción desconocida | `Unknown option: --Type. Supported options are: --type <value>, --help, --version.` · exit 1 | ✔ |
+| `app.js --language es --type popular` | flag desconocido | error explícito | `Unknown option: --language...` · exit 1 | ✔ |
+| `app.js -x --type popular` | alias corto desconocido | error explícito | `Unknown option: -x...` · exit 1 | ✔ |
+| `app.js --type popular --bogus` | flag basura tras el válido | error explícito | `Unknown option: --bogus...` · exit 1 | ✔ |
+| `app.js movies --type popular` | posicional extra | error explícito | `Unexpected argument: movies. This command only accepts options, no positional arguments.` · exit 1 | ✔ |
 | `app.js --type popular --type top` | flag duplicado | primer valor gana | `POPULAR MOVIES` · exit 0 | ✔ |
-| `app.js --language es --type popular` | flag desconocido | error o ignorado explícito | ignorado en silencio · exit 0 | ✔* |
-| `app.js --type popular --help` | flag tras el válido | listar populares | `POPULAR MOVIES` · exit 0 | ✔* |
+| `app.js --type popular --type=top` | mix de sintaxis | primer valor gana | `POPULAR MOVIES` · exit 0 | ✔ |
+| `app.js --type popular --type` | flag duplicado colgante | primer valor gana | `POPULAR MOVIES` · exit 0 | ✔ |
+| `app.js --type popular --help` | ayuda tras el válido | la ayuda tiene prioridad | usage · exit 0 | ✔ |
 | `app.js --type popular </dev/null` | stdin cerrado | funcionamiento normal | listado normal · exit 0 | ✔ |
 
 \* Sin `--type` presente el fallo es correcto; cuando `--type` sí es válido, los flags desconocidos no producen ningún error visible.
@@ -410,7 +446,7 @@ Todas las filas se ejecutaron realmente. `✔` = comportamiento correcto; `✘` 
 |---|---|---|---|
 | `200` con `results[]` de 3 películas | listado con 3 entradas | 15 líneas, 10 secuencias ANSI · exit 0 | ✔ |
 | `200` con `results: []` | mensaje "sin películas", sin error | `No movies found.` · exit 0 | ✔ |
-| `200` con objetos sin `title`/`vote_average`/`release_date` | fallbacks | `Untitled`, `N/A/10`, `Unknown date` · exit 0 | ✔ |
+| `200` con objetos sin `title`/`vote_average`/`release_date` | fallbacks | `Untitled`, `N/A`, `Unknown date` · exit 0 | ✔ |
 | `200` con título con `<script>` y comillas | salida literal segura | impreso literal (inofensivo en terminal) · exit 0 | ✔ |
 | `200` con unicode / emoji | salida legible | `🎬 Unicode ñ á é í` correcto · exit 0 | ✔ |
 | `200` con body no-JSON | error `invalidResponse` | `[ERROR] TMDB API returned an unexpected or empty response.` · exit 1 | ✔ |
@@ -431,7 +467,10 @@ Todas las filas se ejecutaron realmente. `✔` = comportamiento correcto; `✘` 
 | `npm run top-rated` | `node app.js --type top` | `TOP RATED MOVIES` · exit 0 | ✔ |
 | `npm run upcoming` | `node app.js --type upcoming` | `UPCOMING MOVIES` · exit 0 | ✔ |
 | `npm run <inexistente>` | error de npm | exit 1 | ✔ |
-| `npm link` + `tmdb-app` | listado correcto | error de sintaxis de bash · exit 2 | ✘ |
+| `npm start -- --type=top` | parámetros extra a npm | el script manda: `POPULAR MOVIES` · exit 0 | ✔ |
+| `npm link` + `tmdb-app --type popular` | listado correcto | `POPULAR MOVIES` · exit 0 | ✔ |
+| `npm link` + `tmdb-app --type=top` | sintaxis `=` | exit 0 | ✔ |
+| `npm link` + `tmdb-app` sin `--type` | error de argumentos | `[ERROR] Missing required flag...` · exit 1 | ✔ |
 
 ## Manejo de errores
 
@@ -439,13 +478,18 @@ Todos los fallos terminan con `process.exit(1)` y un mensaje en `stderr` precedi
 
 | Caso | Mensaje | Exit |
 |---|---|---|
-| Falta `TMDB_API_KEY` (o está vacía) | `TMDB_API_KEY environment variable is not set. Set it before running the app. Example: TMDB_API_KEY=your_key node app.js --type "playing".` | 1 |
-| Falta `--type`, o sin valor, o seguido de otro flag | `Missing required flag: --type <value>. Example: --type "playing".` | 1 |
+| Falta `--type`, o sin valor, o con `--type=` vacío, o seguido de otro flag | `Missing required flag: --type <value>. Example: --type "playing". Run with --help to see the usage.` | 1 |
 | `--type` inválido | `Invalid --type value. Valid values are: playing, popular, top, upcoming. Example: --type "playing".` | 1 |
+| Flag desconocido (`--language`, `--Type`, `-x`, `--bogus`…) | `Unknown option: <flag>. Supported options are: --type <value>, --help, --version. Run with --help to see the usage.` | 1 |
+| Argumento posicional inesperado | `Unexpected argument: <valor>. This command only accepts options, no positional arguments. Run with --help to see the usage.` | 1 |
+| Falta `TMDB_API_KEY` (o está vacía) | `TMDB_API_KEY environment variable is not set. Set it before running the app. Example: TMDB_API_KEY=your_key node app.js --type "playing".` | 1 |
 | Fallo de red / DNS / TLS | `Network error while reaching TMDB API: <motivo>` | 1 |
 | Respuesta HTTP no 2xx | `TMDB API responded with HTTP <status> (<statusText>). Detail: <status_message de TMDB>. URL: <url completa>` | 1 |
 | JSON inválido, `null` o sin array `results` | `TMDB API returned an unexpected or empty response.` | 1 |
-| Binario sin shebang (solo `tmdb-app`) | error de sintaxis de bash, sin prefijo `[ERROR]` | 2 |
+
+Los errores de argumentos se evalúan **antes** que la variable de entorno: `node app.js` sin nada reporta el `--type` ausente, y sólo después se comprueba `TMDB_API_KEY`.
+
+Casos que **no** son error (salida a `stdout`, exit `0`): `--help`, `-h`, `--version`, `-v`, y el listado sin resultados (`No movies found.`).
 
 Ejemplo de captura de `stderr` manteniendo el código de salida:
 
@@ -482,6 +526,45 @@ export TMDB_API_KEY="tu_api_key_aqui"
 node app.js --type playing
 ```
 
+### Ayuda
+
+```bash
+$ node app.js --help
+tmdb-cli v1.0.0 — List movies from The Movie Database straight into your terminal.
+
+USAGE
+  node app.js --type <value>
+  tmdb-app    --type <value>
+
+OPTIONS
+  --type <value>   Listing to query. Required. Also accepts --type=<value>.
+  --help, -h       Show this help and exit with code 0.
+  --version, -v    Show the version and exit with code 0.
+
+ENVIRONMENT
+  TMDB_API_KEY     Required. TMDB API Key (v3 auth) bearer token.
+
+LISTINGS
+  NOW PLAYING MOVIES    --type playing
+  POPULAR MOVIES        --type popular
+  TOP RATED MOVIES      --type top
+  UPCOMING MOVIES       --type upcoming
+
+EXAMPLES
+  export TMDB_API_KEY="your_api_key_here"
+  node app.js --type popular
+  node app.js --type top | sed 's/\x1b\[[0-9;]*m//g'
+
+Errors are printed to stderr prefixed with [ERROR] and always exit with code 1.
+```
+
+### Versión
+
+```bash
+$ node app.js --version
+tmdb-cli v1.0.0
+```
+
 ### Sólo las 10 primeras líneas (encabezado + 2 películas)
 
 ```bash
@@ -514,25 +597,38 @@ node app.js --type popular >/dev/null 2>&1 && echo "API accesible" || echo "revi
 
 ## Tests
 
-**No existe suite de tests automatizados.** `package.json` no define script `test` ni `lint`, y no hay dependencias de desarrollo. Las 33 pruebas de este README se ejecutaron de forma manual con este procedimiento:
+**No existe suite de tests automatizados.** `package.json` no define script `test` ni `lint`, y no hay dependencias de desarrollo. Las 62 pruebas de este README se ejecutaron de forma manual con este procedimiento:
 
 ```bash
 cd tmdb-cli
 
-# 1. Casos de error sin necesidad de red ni key
-node app.js                                    # exit 1, falta API key
-TMDB_API_KEY=x node app.js                     # exit 1, falta --type
-TMDB_API_KEY=x node app.js --type foo          # exit 1, tipo inválido
+# 1. Ayuda y versión (sin necesidad de red ni de key)
+node app.js --help          # usage en stdout, exit 0
+node app.js -h              # exit 0
+node app.js --version       # tmdb-cli v1.0.0, exit 0
+node app.js -v              # exit 0
 
-# 2. Casos de red (requiere key real)
-TMDB_API_KEY=<real> node app.js --type popular # exit 0 + listado
-TMDB_API_KEY=falsa node app.js --type popular # exit 1, HTTP 401 con detalle
+# 2. Casos de error sin necesidad de red ni key
+node app.js                                        # exit 1, falta --type
+TMDB_API_KEY=x node app.js                         # exit 1, falta --type
+TMDB_API_KEY=x node app.js --type foo              # exit 1, tipo inválido
+TMDB_API_KEY=x node app.js --type=                 # exit 1, valor vacío
+TMDB_API_KEY=x node app.js --language es --type top # exit 1, opción desconocida
+TMDB_API_KEY=x node app.js movies --type top       # exit 1, argumento inesperado
+node app.js --type popular                         # exit 1, falta la key
 
-# 3. Scripts npm
+# 3. Casos de red (requiere key real)
+TMDB_API_KEY=<real>  node app.js --type popular    # exit 0 + listado
+TMDB_API_KEY=falsa   node app.js --type popular    # exit 1, HTTP 401 con detalle
+
+# 4. Scripts npm
 npm start && npm run now-playing && npm run top-rated && npm run upcoming
 
-# 4. Binario global (documenta el bug del shebang)
-npm link && tmdb-app --type popular
+# 5. Binario global
+npm link
+tmdb-app --type popular   # exit 0 + listado
+tmdb-app --help           # exit 0
+npm unlink -g tmdb-cli
 ```
 
 Para aislar la capa de red y probar el happy path sin una key válida, se puede interceptar `fetch` con un preload de Node:
@@ -543,19 +639,29 @@ TMDB_API_KEY=dummy node -r ./mock-fetch.js app.js --type popular
 
 Los criterios de aceptación definidos en `spec/features/NNN-*/spec.md` cubren este mismo conjunto de escenarios como texto; no están automatizados.
 
-## Limitaciones conocidas
+## Limitaciones y pendientes
 
-Detectadas durante la verificación de esta CLI:
+### Bugs corregidos
 
-| # | Severidad | Problema | Detalle | Corrección propuesta |
+Detectados durante la verificación de esta CLI y ya arreglados:
+
+| # | Severidad original | Problema | Corrección aplicada |
+|---|---|---|---|
+| 1 | **Crítica** | El binario `tmdb-app` no arrancaba: `package.json` declara `bin` pero `app.js` no tenía shebang, así que el kernel lo ejecutaba con bash y abortaba con `error sintáctico` y exit `2`. Las cuatro invocaciones `tmdb-app --type ...` documentadas no funcionaban | Añadido `#!/usr/bin/env node` y el bit de ejecución en `app.js` |
+| 2 | Media | `tmdb-app --help`, `-h`, `--version` y `-v` devolvían el error de `--type` en lugar de un usage | `lib/args.js` detecta esas acciones y `app.js` imprime el usage o la versión con exit `0`, sin exigir `TMDB_API_KEY` |
+| 3 | Baja | Los flags desconocidos y los argumentos posicionales se ignoraban en silencio, dando la falsa impresión de que el filtro se aplicaba | `lib/args.js` lanza `unknownFlag` o `unexpectedArgument` con exit `1` |
+| 4 | Baja | `--type=popular` no se parseaba y devolvía `Missing required flag` | `lib/args.js` acepta tanto `--type popular` como `--type=popular` |
+| 5 | Baja | Cuando faltaba `vote_average` se imprimía `N/A/10`, una puntuación imposible de leer | `lib/formatter.js` devuelve `N/A` sin el sufijo `/10` |
+
+Como efecto secundario del arreglo 2, la validación de argumentos se evalúa **antes** que `TMDB_API_KEY`: `node app.js` sin nada ahora reporta el `--type` ausente en lugar de la variable de entorno.
+
+### Pendientes
+
+| # | Severidad | Problema | Detalle | Propuesta |
 |---|---|---|---|---|
-| 1 | **Crítica** | El binario `tmdb-app` no arranca | `package.json:6-8` declara `bin`, pero `app.js` **no tiene shebang**. `npm link` sólo cambia el modo a `755`; el kernel ejecuta el archivo con bash y aborta con `error sintáctico cerca del elemento inesperado '('` y exit `2`. Las cuatro invocaciones `tmdb-app --type ...` documentadas no funcionan | Añadir `#!/usr/bin/env node` como primera línea de `app.js` (verificado: con esa línea el flujo da exit `0` con salida formateada) |
-| 2 | Media | No hay `--help` ni `--version` | `tmdb-app --help`, `-h`, `--version` y `-v` devuelven el error de `--type` en vez de un usage. No hay forma de descubrir los valores válidos sin leer el código | Tratar `--help`/`-h` en `lib/args.js` y devolver el uso con exit `0` |
-| 3 | Baja | Los flags desconocidos se ignoran en silencio | `--language es`, `--type popular --help` y los posicionales extra no producen ningún aviso, lo que puede dar la falsa impresión de que el filtro se aplicó | Rechazar flags no reconocidos con un mensaje explícito |
-| 4 | Baja | `--type=valor` no se parsea | La sintaxis con `=` es habitual y aquí produce `Missing required flag` | Soportar `--type=valor` además del par separado |
-| 5 | Baja | `N/A/10` como placeholder | Cuando falta `vote_average` se imprime `N/A/10`, una puntuación imposible de leer | Imprimir `N/A` sin el sufijo, o `Rating: N/A` en línea propia |
-| 6 | Info | `language` y `page` fijos | `consts/api.js:5-7` los fija a `en-US` y `1`; siempre se devuelve la primera página (20 películas) | Añadir flags `--language` y `--page` si se requiere |
-| 7 | Info | Sin `--help` en la documentación previa | El `README.md` anterior no mencionaba los cuatro comandos del `package.json` (`npm run *`) | Corregido en este README |
+| 1 | Info | `language` y `page` fijos | `consts/api.js` los fija a `en-US` y `1`; siempre se devuelve la primera página (20 películas) y no hay forma de pedir actor, director o búsqueda por texto | Añadir flags `--language` y `--page` si se requiere |
+| 2 | Info | `spec/` y `docs/` desactualizados | Los documentos de las features 001-004 describen el flujo anterior (validación de la key antes que los argumentos, sin `--help`) | Actualizar las specs y docs, o registrar este arreglo como feature 005 |
+| 3 | Info | Sin suite de tests automatizados | La verificación es manual, tal y como permite la constitución ("ejecución manual del binario") | Añadir `npm test` con `node:test` si se quiere cobertura en CI |
 
 ## Documentación técnica
 

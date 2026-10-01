@@ -14,8 +14,10 @@ function formatDate(releaseDate) {
 }
 
 function formatRating(voteAverage) {
-  const rating = typeof voteAverage === 'number' ? voteAverage.toFixed(1) : 'N/A';
-  return `${rating}/10`;
+  if (typeof voteAverage !== 'number') {
+    return 'N/A';
+  }
+  return `${voteAverage.toFixed(1)}/10`;
 }
 
 function buildDivider(character, length) {
